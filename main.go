@@ -94,7 +94,8 @@ func handleClient(conn net.Conn) {
 	reader := getReader(conn)
 
 	for field := range reader {
-		//
+		fmt.Println("Field: \n", field.Field)
+		fmt.Println("Value: \n", field.Value)
 	}
 
 }
@@ -102,7 +103,8 @@ func handleClient(conn net.Conn) {
 func getReqLine(c net.Conn) (ReqLine, error) {
 	var result ReqLine
 	
-	line := ""
+	// Read the request line
+	var sb strings.Builder
 	for {
 		b := make([]byte, 1)
 		_, err := c.Read(b)
@@ -111,22 +113,26 @@ func getReqLine(c net.Conn) (ReqLine, error) {
 		}
 
 		if rune(b[0]) != '\n' {
-			line += string(b)
+			sb.WriteByte(b[0])
 		} else {
 			break
 		}
 
 	}
 
-	resArr := strings.Split(line, "\n")
-	if len(resArr) != 4 {
+	var line = sb.String()
+	// Parse the request line
+	resArr := strings.Split(line, " ")
+	if len(resArr) != 3 {
 		return result, InvalidRequestLine
 	}
 
-	result.Method = resArr[0]
-	result.Resource = resArr[1]
-	result.Protocol = resArr[2]
-	result.Version = resArr[3]
+	result.Method = strings.TrimSpace(resArr[0])
+	result.Resource = strings.TrimSpace(resArr[1])
+
+	var protocol = strings.TrimSpace(resArr[2])
+	result.Protocol = strings.Split(protocol, "/")[0]
+	result.Version = strings.Split(protocol, "/")[1]
 
 	return result, nil
 }
