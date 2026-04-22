@@ -36,8 +36,8 @@ type LimitReadCloser struct {
 	io.Closer
 }
 
-func (b LimitReadCloser) Close() error {
-	return b.Closer.Close()
+func (c LimitReadCloser) Close() error {
+	return c.Closer.Close()
 }
 
 
@@ -72,14 +72,14 @@ func parseRequest(conn net.Conn) (*Request, error) {
 	return &req, nil
 }
 
-func getReqLine(c net.Conn) (ReqLine, error) {
+func getReqLine(conn net.Conn) (ReqLine, error) {
 	var result ReqLine
 	
 	// Read the request line
 	var sb strings.Builder
 	for {
 		b := make([]byte, 1)
-		_, err := c.Read(b)
+		_, err := conn.Read(b)
 		if err != nil {
 			return result, err
 		}
@@ -109,7 +109,7 @@ func getReqLine(c net.Conn) (ReqLine, error) {
 	return result, nil
 }
 
-func getBody(header map[string][]string, c io.ReadCloser) (io.ReadCloser, error) {
+func getBody(header map[string][]string, conn io.ReadCloser) (io.ReadCloser, error) {
 	var body io.ReadCloser
 
 	// Check if there is a body... via Content-Length
@@ -120,8 +120,8 @@ func getBody(header map[string][]string, c io.ReadCloser) (io.ReadCloser, error)
 			return nil, err
 		}
 		body = LimitReadCloser {
-			Reader: io.LimitReader(c, int64(cl)),
-			Closer: c,
+			Reader: io.LimitReader(conn, int64(cl)),
+			Closer: conn,
 		}
 	} else {
 		body = nil
@@ -130,7 +130,7 @@ func getBody(header map[string][]string, c io.ReadCloser) (io.ReadCloser, error)
 	return body, nil
 }
 
-func getHeaderReader(c io.ReadCloser) <-chan Field {
+func getHeaderReader(conn io.ReadCloser) <-chan Field {
 	out := make(chan Field)
 
 	go func() {
@@ -140,7 +140,7 @@ func getHeaderReader(c io.ReadCloser) <-chan Field {
 		line := ""
 		for {
 			data := make([]byte, 8)
-			n, err := c.Read(data)
+			n, err := conn.Read(data)
 			if err != nil {
 				break
 			}
@@ -155,9 +155,12 @@ func getHeaderReader(c io.ReadCloser) <-chan Field {
 				}
 
 				var f Field
-				f.Field = strings.TrimSpace(strings.Split(line, ":")[0])
-
-				values := strings.Split(strings.Split(line, ":")[1], ",")
+				field, value, ok := strings.Cut(line, ":")
+				if !ok {
+					break
+				}
+				f.Field = strings.TrimSpace(field)
+				values := strings.Split(value, ",")
 
 				for i, s := range values {
 					values[i] = strings.TrimSpace(s)

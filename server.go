@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type Server struct {
@@ -48,17 +49,22 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) handleClient(conn net.Conn) {
 	defer conn.Close()
 
+	// 30 second timeout.  
+	// TODO if keepalive is added, have to
+	// reset the deadline when a new request comes in and not kill the
+	// whole conn
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	var res Response
+	res.conn = conn
+
 	var req *Request 
 	req, err := parseRequest(conn)
 	if err != nil {
 		fmt.Println("Failed to parse request:", err)
-		// TODO Send some sort of error status and response
+		res.sendError(StatusBadRequest)
 		return
 	}
-
-	// Set up the Response
-	var res Response
-	res.conn = conn
 
 	s.Handler(res, req)
 }
@@ -69,7 +75,13 @@ func (s *Server) HandleFunc(route string, handler Handler) {
 
 func (s *Server) DefaultMux() Handler {
 	return func(res Response, req *Request) {
-		s.Routes[req.Resource](res, req)
+		handler, ok := s.Routes[req.Resource]
+		if !ok {
+			//Send resource not found status
+			res.sendError(StatusNotFound)
+		} else {
+			handler(res, req)
+		}
 	}
 }
 
