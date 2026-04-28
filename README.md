@@ -8,7 +8,7 @@ An HTTP/1.1 server built from scratch in Go.
 - [x] Graceful shutdown
 - [x] Keep-alive
 - [ ] Structured request logging
-- [ ] `/metrics` endpoint (Prometheus format)
+- [ ] `/metrics` endpoint
 - [ ] systemd socket activation
 - [ ] Chunked transfer encoding
 - [ ] gzip compression
