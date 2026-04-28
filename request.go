@@ -44,13 +44,12 @@ func (c LimitReadCloser) Close() error {
 var InvalidRequestLine = errors.New("invalid request line")
 
 
-func parseRequest(conn net.Conn) (*Request, error) {
+func parseRequest(conn net.Conn, status *ConnStatus) (*Request, error) {
 	var req Request
 	// Parse the request
 	// Parse request line
 	reqLine, err := getReqLine(conn)
 	if err != nil {
-		fmt.Println("Error parsing request line")
 		return &req, err
 	}
 	req.Method = reqLine.Method
@@ -59,14 +58,24 @@ func parseRequest(conn net.Conn) (*Request, error) {
 	req.Version = reqLine.Version
 
 	req.Header = make(map[string][]string)
+
 	// Parse headers
 	reader := getHeaderReader(conn)
 	for field := range reader {
 		req.Header[field.Field] = field.Value
 	}
+	if _, ok := req.Header["Connection"]; !ok {
+		req.Header["Connection"] = []string{"keep-alive"} // keep-alive is the default behavior
+	}
+
+	*status = ConnProcessing
 
 	// Parse body
 	body, err := getBody(req.Header, conn)
+	if err != nil {
+		fmt.Println("Error getting body")
+		return &req, err
+	}
 	req.Body = body
 
 	return &req, nil
@@ -136,43 +145,43 @@ func getHeaderReader(conn io.ReadCloser) <-chan Field {
 	go func() {
 		defer close(out)
 
-		// Parse headers
 		line := ""
+		remaining := []byte{}
 		for {
 			data := make([]byte, 8)
 			n, err := conn.Read(data)
 			if err != nil {
 				break
 			}
-			data = data[:n]
+			remaining = append(remaining, data[:n]...)
 
-			if i := bytes.IndexByte(data, '\n'); i != -1 {
-				line += string(data[:i])
-
-				// Check if next line is not a header
-				if !strings.Contains(line, ":") {
+			for {
+				i := bytes.IndexByte(remaining, '\n')
+				if i == -1 {
 					break
 				}
+				line += string(remaining[:i])
+				remaining = remaining[i+1:]
 
-				var f Field
+				// If its not a header line
+				if !strings.Contains(line, ":") {
+					return
+				}
+
+				// Parse header line
 				field, value, ok := strings.Cut(line, ":")
 				if !ok {
-					break
+					return
 				}
+				var f Field
 				f.Field = strings.TrimSpace(field)
 				values := strings.Split(value, ",")
-
 				for i, s := range values {
 					values[i] = strings.TrimSpace(s)
-				} 
-
+				}
 				f.Value = values
-
 				out <- f
-
-				line = string(data[i:])
-			} else {
-				line += string(data)
+				line = ""
 			}
 		}
 	}()
