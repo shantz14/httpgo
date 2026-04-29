@@ -105,9 +105,10 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 	defer conn.Close()
 	defer wg.Done()
 
+	// for easier reading... not sure how i feel abt this
+	reader := bufio.NewReader(conn)
+
 	for {
-		// for easier reading... not sure how i feel abt this
-		reader := bufio.NewReader(conn)
 
 		select {
 		case <-ctx.Done():
