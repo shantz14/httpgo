@@ -1,6 +1,6 @@
 # httpgo
 
-An HTTP/1.1 server built from scratch in Go.
+An HTTP/1.1 server built in Go.
 
 ## Features
 

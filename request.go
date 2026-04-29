@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -26,11 +26,6 @@ type ReqLine struct {
 	Version string
 }
 
-type Field struct {
-	Field string
-	Value []string
-}
-
 type LimitReadCloser struct {
 	io.Reader
 	io.Closer
@@ -44,11 +39,11 @@ func (c LimitReadCloser) Close() error {
 var InvalidRequestLine = errors.New("invalid request line")
 
 
-func parseRequest(conn net.Conn, status *ConnStatus) (*Request, error) {
+func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus) (*Request, error) {
 	var req Request
 	// Parse the request
 	// Parse request line
-	reqLine, err := getReqLine(conn)
+	reqLine, err := getReqLine(reader)
 	if err != nil {
 		return &req, err
 	}
@@ -60,10 +55,7 @@ func parseRequest(conn net.Conn, status *ConnStatus) (*Request, error) {
 	req.Header = make(map[string][]string)
 
 	// Parse headers
-	reader := getHeaderReader(conn)
-	for field := range reader {
-		req.Header[field.Field] = field.Value
-	}
+	getHeaders(reader, &req.Header)
 	if _, ok := req.Header["Connection"]; !ok {
 		req.Header["Connection"] = []string{"keep-alive"} // keep-alive is the default behavior
 	}
@@ -71,7 +63,7 @@ func parseRequest(conn net.Conn, status *ConnStatus) (*Request, error) {
 	*status = ConnProcessing
 
 	// Parse body
-	body, err := getBody(req.Header, conn)
+	body, err := getBody(req.Header, conn, reader)
 	if err != nil {
 		fmt.Println("Error getting body")
 		return &req, err
@@ -81,27 +73,14 @@ func parseRequest(conn net.Conn, status *ConnStatus) (*Request, error) {
 	return &req, nil
 }
 
-func getReqLine(conn net.Conn) (ReqLine, error) {
+func getReqLine(r *bufio.Reader) (ReqLine, error) {
 	var result ReqLine
 	
-	// Read the request line
-	var sb strings.Builder
-	for {
-		b := make([]byte, 1)
-		_, err := conn.Read(b)
-		if err != nil {
-			return result, err
-		}
-
-		if rune(b[0]) != '\n' {
-			sb.WriteByte(b[0])
-		} else {
-			break
-		}
-
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return result, err
 	}
 
-	var line = sb.String()
 	// Parse the request line
 	resArr := strings.Split(line, " ")
 	if len(resArr) != 3 {
@@ -118,7 +97,10 @@ func getReqLine(conn net.Conn) (ReqLine, error) {
 	return result, nil
 }
 
-func getBody(header map[string][]string, conn io.ReadCloser) (io.ReadCloser, error) {
+// getBody combines the bufio.Reader Read and the net.Conn Close into an
+// io.LimitReader with a limit equal to the Content-Length and returns
+// it as the request body.
+func getBody(header map[string][]string, conn io.Closer, reader io.Reader) (io.ReadCloser, error) {
 	var body io.ReadCloser
 
 	// Check if there is a body... via Content-Length
@@ -129,7 +111,7 @@ func getBody(header map[string][]string, conn io.ReadCloser) (io.ReadCloser, err
 			return nil, err
 		}
 		body = LimitReadCloser {
-			Reader: io.LimitReader(conn, int64(cl)),
+			Reader: io.LimitReader(reader, int64(cl)),
 			Closer: conn,
 		}
 	} else {
@@ -139,53 +121,28 @@ func getBody(header map[string][]string, conn io.ReadCloser) (io.ReadCloser, err
 	return body, nil
 }
 
-func getHeaderReader(conn io.ReadCloser) <-chan Field {
-	out := make(chan Field)
-
-	go func() {
-		defer close(out)
-
-		line := ""
-		remaining := []byte{}
-		for {
-			data := make([]byte, 8)
-			n, err := conn.Read(data)
-			if err != nil {
-				break
-			}
-			remaining = append(remaining, data[:n]...)
-
-			for {
-				i := bytes.IndexByte(remaining, '\n')
-				if i == -1 {
-					break
-				}
-				line += string(remaining[:i])
-				remaining = remaining[i+1:]
-
-				// If its not a header line
-				if !strings.Contains(line, ":") {
-					return
-				}
-
-				// Parse header line
-				field, value, ok := strings.Cut(line, ":")
-				if !ok {
-					return
-				}
-				var f Field
-				f.Field = strings.TrimSpace(field)
-				values := strings.Split(value, ",")
-				for i, s := range values {
-					values[i] = strings.TrimSpace(s)
-				}
-				f.Value = values
-				out <- f
-				line = ""
-			}
+func getHeaders(r *bufio.Reader, headers *map[string][]string) error {
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return err
 		}
-	}()
 
-	return out
+		// If its not a header line
+		if !strings.Contains(line, ":") {
+			return nil
+		}
+
+		// Parse header line
+		// Its literally impossible for this not to be "ok" right?
+		field, value, _ := strings.Cut(line, ":")
+		field = strings.TrimSpace(field)
+		values := strings.Split(value, ",")
+		for i, s := range values {
+			values[i] = strings.TrimSpace(s)
+		}
+		
+		(*headers)[field] = values
+	}
 }
 

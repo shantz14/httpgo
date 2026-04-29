@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -105,6 +106,9 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 	defer wg.Done()
 
 	for {
+		// for easier reading... not sure how i feel abt this
+		reader := bufio.NewReader(conn)
+
 		select {
 		case <-ctx.Done():
 			return
@@ -116,8 +120,12 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 			res.conn = conn
 
 			var req *Request 
-			req, err := parseRequest(conn, status)
+			req, err := parseRequest(conn, reader, status)
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+
 				if errors.Is(err, os.ErrClosed) {
 					res.sendError(StatusServiceUnavailable)
 				} else if errors.Is(err, os.ErrDeadlineExceeded) {
