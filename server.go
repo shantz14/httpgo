@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"bufio"
 	"time"
 )
 
@@ -88,19 +88,28 @@ func (s *Server) ListenAndServe() error {
 			continue
 		}
 
-		fmt.Println("Request accepted from ", conn.RemoteAddr().String())
+		fmt.Println("New connection from ", conn.RemoteAddr().String())
 
 		connStatuses[conn] = new(ConnStatus)
 		*connStatuses[conn] = ConnNew
 
+		// i need to know when all routines are done
 		wg.Add(1)
-		go s.handleClient(conn, ctx, &wg, connStatuses[conn])
+		go func() {
+			// and when each one is done
+			doneCh := make(chan struct{})
+			go s.handleClient(conn, ctx, &wg, connStatuses[conn], doneCh)
+
+			<-doneCh
+			delete(connStatuses, conn)
+		}()
 	}
 }
 
-func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitGroup, status *ConnStatus) {
+func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitGroup, status *ConnStatus, doneCh chan struct{}) {
 	defer func() {
 		*status = ConnClosed
+		doneCh<- struct{}{}
 	}()
 	defer conn.Close()
 	defer wg.Done()
