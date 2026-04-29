@@ -90,6 +90,12 @@ func getReqLine(r *bufio.Reader) (ReqLine, error) {
 	result.Method = strings.TrimSpace(resArr[0])
 	result.Resource = strings.TrimSpace(resArr[1])
 
+	/* TODO IF a client is silly/malicious and sends a HTTP/0.9 request
+		this will panic because it looks like this
+
+		GET /index.html
+
+	*/
 	var protocol = strings.TrimSpace(resArr[2])
 	result.Protocol = strings.Split(protocol, "/")[0]
 	result.Version = strings.Split(protocol, "/")[1]

@@ -93,6 +93,10 @@ func (s *Server) ListenAndServe() error {
 		connStatuses[conn] = new(ConnStatus)
 		*connStatuses[conn] = ConnNew
 
+		// TODO the sync stuff needs to be refactored its too weird. 
+		// I think it's possible to do this all with a Mutex
+		// instead of chans and a WaitGroup
+
 		// i need to know when all routines are done
 		wg.Add(1)
 		go func() {
@@ -110,9 +114,9 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 	defer func() {
 		*status = ConnClosed
 		doneCh<- struct{}{}
+		conn.Close()
+		wg.Done()
 	}()
-	defer conn.Close()
-	defer wg.Done()
 
 	// for easier reading... not sure how i feel abt this
 	reader := bufio.NewReader(conn)
@@ -139,6 +143,7 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 				if errors.Is(err, os.ErrClosed) {
 					res.sendError(StatusServiceUnavailable)
 				} else if errors.Is(err, os.ErrDeadlineExceeded) {
+					if *status == ConnIdle { return }
 					res.sendError(StatusRequestTimeout)
 				} else {
 					fmt.Println("Failed to parse request:", err)
@@ -179,6 +184,7 @@ func (s *Server) DefaultMux() Handler {
 
 func shutdownIdleConns(statuses map[net.Conn]*ConnStatus) {
 	for conn, status := range statuses {
+		// TODO there is a data race with handleClient here
 		if *status == ConnIdle {
 			conn.Close()
 		}
