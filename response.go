@@ -7,7 +7,9 @@ import (
 
 type Response struct {
 	conn io.WriteCloser
-	connType string //close / keep-alive
+	status StatusCode
+	Request *Request
+	logCh chan Log
 }
 
 type StatusCode string
@@ -28,23 +30,27 @@ var statusText = map[StatusCode]string {
 	StatusRequestTimeout: "Request Timeout",
 }
 
-func (r Response) send(status StatusCode, contentType string, data []byte) {
-	fmt.Fprintf(r.conn, "HTTP/1.1 %s %s\r\n", status, statusText[status])
+func (r *Response) send(contentType string, data []byte) {
+	fmt.Fprintf(r.conn, "HTTP/1.1 %s %s\r\n", r.status, statusText[r.status])
 	fmt.Fprintf(r.conn, "Content-Type: %s\r\n", contentType)
 	fmt.Fprintf(r.conn, "Content-Length: %d\r\n", len(data))
-	fmt.Fprintf(r.conn, "Connection: %s\r\n", r.connType)
+	fmt.Fprintf(r.conn, "Connection: %s\r\n", r.Request.Header["Connection"][0])
 	fmt.Fprintf(r.conn, "\r\n")
+
+	sendLog(*r, len(data))
 
 	r.conn.Write(data)
 }
 
-func (r Response) sendText(text string) {
-	r.send(StatusOK, "text/plain", []byte(text))
+func (r *Response) sendText(text string) {
+	r.status = StatusOK
+	r.send("text/plain", []byte(text))
 }
 
-func (r Response) sendError(status StatusCode) {
+func (r *Response) sendError(status StatusCode) {
+	r.status = status
 	// This silly
-	r.send(status, "text/plain", []byte{})
+	r.send("text/plain", []byte{})
 }
 
 

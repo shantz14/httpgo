@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Request struct {
@@ -17,13 +18,7 @@ type Request struct {
 	Version string
 	Header map[string][]string
 	Body io.ReadCloser
-}
-
-type ReqLine struct {
-	Method string
-	Resource string
-	Protocol string
-	Version string
+	StartTime time.Time
 }
 
 type LimitReadCloser struct {
@@ -39,18 +34,17 @@ func (c LimitReadCloser) Close() error {
 var InvalidRequestLine = errors.New("invalid request line")
 
 
-func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus) (*Request, error) {
+func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus, start *time.Time) (*Request, error) {
 	var req Request
 	// Parse the request
 	// Parse request line
-	reqLine, err := getReqLine(reader)
+	err := getReqLine(reader, &req)
 	if err != nil {
 		return &req, err
 	}
-	req.Method = reqLine.Method
-	req.Resource = reqLine.Resource
-	req.Protocol = reqLine.Protocol
-	req.Version = reqLine.Version
+
+	*start = time.Now()
+	*status = ConnProcessing
 
 	req.Header = make(map[string][]string)
 
@@ -59,8 +53,6 @@ func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus) (*Req
 	if _, ok := req.Header["Connection"]; !ok {
 		req.Header["Connection"] = []string{"keep-alive"} // keep-alive is the default behavior
 	}
-
-	*status = ConnProcessing
 
 	// Parse body
 	body, err := getBody(req.Header, conn, reader)
@@ -73,22 +65,20 @@ func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus) (*Req
 	return &req, nil
 }
 
-func getReqLine(r *bufio.Reader) (ReqLine, error) {
-	var result ReqLine
-	
+func getReqLine(r *bufio.Reader, req *Request) (error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
-		return result, err
+		return err
 	}
 
 	// Parse the request line
 	resArr := strings.Split(line, " ")
 	if len(resArr) != 3 {
-		return result, InvalidRequestLine
+		return InvalidRequestLine
 	}
 
-	result.Method = strings.TrimSpace(resArr[0])
-	result.Resource = strings.TrimSpace(resArr[1])
+	req.Method = strings.TrimSpace(resArr[0])
+	req.Resource = strings.TrimSpace(resArr[1])
 
 	/* TODO IF a client is silly/malicious and sends a HTTP/0.9 request
 		this will panic because it looks like this
@@ -97,10 +87,10 @@ func getReqLine(r *bufio.Reader) (ReqLine, error) {
 
 	*/
 	var protocol = strings.TrimSpace(resArr[2])
-	result.Protocol = strings.Split(protocol, "/")[0]
-	result.Version = strings.Split(protocol, "/")[1]
+	req.Protocol = strings.Split(protocol, "/")[0]
+	req.Version = strings.Split(protocol, "/")[1]
 
-	return result, nil
+	return nil
 }
 
 // getBody combines the bufio.Reader Read and the net.Conn Close into an

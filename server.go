@@ -66,6 +66,8 @@ func (s *Server) ListenAndServe() error {
 
 	connStatuses := map[net.Conn]*ConnStatus{}
 
+	logCh := initLogger(ctx)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -102,7 +104,7 @@ func (s *Server) ListenAndServe() error {
 		go func() {
 			// and when each one is done
 			doneCh := make(chan struct{})
-			go s.handleClient(conn, ctx, &wg, connStatuses[conn], doneCh)
+			go s.handleClient(conn, ctx, &wg, connStatuses[conn], doneCh, logCh)
 
 			<-doneCh
 			delete(connStatuses, conn)
@@ -110,31 +112,40 @@ func (s *Server) ListenAndServe() error {
 	}
 }
 
-func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitGroup, status *ConnStatus, doneCh chan struct{}) {
+func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitGroup, status *ConnStatus, doneCh chan struct{}, logCh chan Log) {
 	defer func() {
 		*status = ConnClosed
-		doneCh<- struct{}{}
+		close(doneCh)
 		conn.Close()
 		wg.Done()
 	}()
 
 	// for easier reading... not sure how i feel abt this
 	reader := bufio.NewReader(conn)
-
+	
 	for {
 
 		select {
 		case <-ctx.Done():
 			return
 		default:
+			// TODO refactor SO THAT this blocks in some waitForConn function
+			// SO THAT the logic that has to run right after unblocking but
+			// has nothing to do with parsing the request isn't shoved into
+			// parseRequest
+
 			// 15 second timeout
 			conn.SetDeadline(time.Now().Add(15 * time.Second))
 
 			var res Response
 			res.conn = conn
+			res.logCh = logCh
 
 			var req *Request 
-			req, err := parseRequest(conn, reader, status)
+			var start time.Time
+			// parseRequest has ended up with a bunch of stuff because its
+			// the first place that blocks when the connection is idle
+			req, err := parseRequest(conn, reader, status, &start)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -151,11 +162,12 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 				}
 				return
 			}
-			res.connType = req.Header["Connection"][0]
+			req.StartTime = start
+			res.Request = req
 
 			s.Handler(res, req)
 
-			// Current behaivor:
+			// Current behavior:
 			// No Connection header - assume keep-alive, like HTTP/1.1
 			if value, ok := req.Header["Connection"]; ok && value[0] == "close" {
 				return
