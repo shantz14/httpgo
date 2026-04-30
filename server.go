@@ -140,6 +140,7 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 			var res Response
 			res.conn = conn
 			res.logCh = logCh
+			res.Header = make(map[string][]string)
 
 			var req *Request 
 			var start time.Time
