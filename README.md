@@ -11,7 +11,7 @@ An HTTP/1.1 server built in Go.
 - [ ] `/metrics` endpoint
 - [ ] systemd socket activation
 - [ ] Chunked transfer encoding
-- [ ] gzip compression
+- [x] gzip compression
 - [ ] HTTP caching (`ETag`, `304`)
 - [ ] Range requests (`206 Partial Content`)
 - [ ] Static file serving
