@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,7 +36,7 @@ func (c LimitReadCloser) Close() error {
 var InvalidRequestLine = errors.New("invalid request line")
 
 
-func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus, mx *sync.Mutex, start *time.Time) (*Request, error) {
+func parseRequest(conn net.Conn, reader *bufio.Reader, status *atomic.Int32, mx *sync.Mutex, start *time.Time) (*Request, error) {
 	var req Request
 	// Parse the request
 	// Parse request line
@@ -47,7 +48,7 @@ func parseRequest(conn net.Conn, reader *bufio.Reader, status *ConnStatus, mx *s
 	*start = time.Now()
 
 	mx.Lock()
-	*status = ConnProcessing
+	status.Store(ConnProcessing)
 	mx.Unlock()
 
 	req.Header = make(map[string][]string)

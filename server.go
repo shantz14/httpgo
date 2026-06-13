@@ -63,6 +63,7 @@ func (s *Server) ListenAndServe() error {
 
 	// Mutex around connStatuses
 	var mx sync.Mutex
+	var wg sync.WaitGroup
 
 	connStatuses := map[net.Conn]*atomic.Int32{}
 
@@ -80,8 +81,7 @@ func (s *Server) ListenAndServe() error {
 				fmt.Println("Done")
 
 				fmt.Println("Waiting for all connections to shutdown...")
-				// Use mx and wait for all conns in the map to be
-				// status done
+				wg.Wait()
 
 				fmt.Println("Done")
 				return ctx.Err()
@@ -96,26 +96,23 @@ func (s *Server) ListenAndServe() error {
 		connStatuses[conn] = new(atomic.Int32)
 		connStatuses[conn].Store(ConnNew)
 
-		// TODO the sync stuff needs to be refactored its too weird. 
-		// I think it's possible to do this all with a Mutex
-		// instead of chans and a WaitGroup
-
-		go s.handleClient(conn, ctx, &mx, connStatuses, logCh)
-
-		// should each client have their own mutex?
-		delete(connStatuses, conn)
+		wg.Add(1)
+		go s.handleClient(conn, ctx, &mx, &wg, connStatuses, logCh)
 	}
 }
 
-func (s *Server) handleClient(conn net.Conn, ctx context.Context, mx *sync.Mutex, connStatuses map[net.Conn]*ConnStatus, logCh chan Log) {
+func (s *Server) handleClient(conn net.Conn, ctx context.Context, mx *sync.Mutex, wg *sync.WaitGroup,  connStatuses map[net.Conn]*atomic.Int32, logCh chan Log) {
 	defer func() {
 		mx.Lock()
 		delete(connStatuses, conn)
 		mx.Unlock()
 		conn.Close()
+		wg.Done()
 	}()
 
 	reader := bufio.NewReader(conn)
+
+	statusPtr := connStatuses[conn]
 	
 	for {
 
@@ -140,7 +137,7 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, mx *sync.Mutex
 			var start time.Time
 			// parseRequest has ended up with a bunch of stuff because its
 			// the first place that blocks when the connection is idle
-			req, err := parseRequest(conn, reader, status, mx, &start)
+			req, err := parseRequest(conn, reader, statusPtr, mx, &start)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -149,9 +146,7 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, mx *sync.Mutex
 				if errors.Is(err, os.ErrClosed) {
 					res.sendError(StatusServiceUnavailable)
 				} else if errors.Is(err, os.ErrDeadlineExceeded) {
-					mx.Lock()
-					if *status == ConnIdle { return }
-					mx.Unlock()
+					if statusPtr.Load() == ConnIdle { return }
 					res.sendError(StatusRequestTimeout)
 				} else {
 					fmt.Println("Failed to parse request:", err)
@@ -170,9 +165,7 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, mx *sync.Mutex
 				return
 			}
 
-			mx.Lock()
-			*status = ConnIdle
-			mx.Unlock()
+			statusPtr.Store(ConnIdle)
 		}
 	}
 }
@@ -195,7 +188,6 @@ func (s *Server) DefaultMux() Handler {
 
 func shutdownIdleConns(statuses map[net.Conn]*atomic.Int32) {
 	for conn, status := range statuses {
-		// TODO there is a data race with handleClient here
 		if status.Load() == ConnIdle {
 			status.Store(ConnClosed)
 			conn.Close()
