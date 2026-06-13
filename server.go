@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +10,8 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
-	"bufio"
 	"time"
 )
 
@@ -59,12 +60,11 @@ func (s *Server) ListenAndServe() error {
 		listener.Close()
 	}()
 
-	// waitgroup to wait for all client goroutines to
-	// gracefully shutdown before main loop can exit
-	// waitgroup is just a counting semaphore
-	var wg sync.WaitGroup
 
-	connStatuses := map[net.Conn]*ConnStatus{}
+	// Mutex around connStatuses
+	var mx sync.Mutex
+
+	connStatuses := map[net.Conn]*atomic.Int32{}
 
 	logCh := initLogger(ctx)
 
@@ -80,7 +80,8 @@ func (s *Server) ListenAndServe() error {
 				fmt.Println("Done")
 
 				fmt.Println("Waiting for all connections to shutdown...")
-				wg.Wait()
+				// Use mx and wait for all conns in the map to be
+				// status done
 
 				fmt.Println("Done")
 				return ctx.Err()
@@ -92,35 +93,28 @@ func (s *Server) ListenAndServe() error {
 
 		fmt.Println("New connection from ", conn.RemoteAddr().String())
 
-		connStatuses[conn] = new(ConnStatus)
-		*connStatuses[conn] = ConnNew
+		connStatuses[conn] = new(atomic.Int32)
+		connStatuses[conn].Store(ConnNew)
 
 		// TODO the sync stuff needs to be refactored its too weird. 
 		// I think it's possible to do this all with a Mutex
 		// instead of chans and a WaitGroup
 
-		// i need to know when all routines are done
-		wg.Add(1)
-		go func() {
-			// and when each one is done
-			doneCh := make(chan struct{})
-			go s.handleClient(conn, ctx, &wg, connStatuses[conn], doneCh, logCh)
+		go s.handleClient(conn, ctx, &mx, connStatuses, logCh)
 
-			<-doneCh
-			delete(connStatuses, conn)
-		}()
+		// should each client have their own mutex?
+		delete(connStatuses, conn)
 	}
 }
 
-func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitGroup, status *ConnStatus, doneCh chan struct{}, logCh chan Log) {
+func (s *Server) handleClient(conn net.Conn, ctx context.Context, mx *sync.Mutex, connStatuses map[net.Conn]*ConnStatus, logCh chan Log) {
 	defer func() {
-		*status = ConnClosed
-		close(doneCh)
+		mx.Lock()
+		delete(connStatuses, conn)
+		mx.Unlock()
 		conn.Close()
-		wg.Done()
 	}()
 
-	// for easier reading... not sure how i feel abt this
 	reader := bufio.NewReader(conn)
 	
 	for {
@@ -146,7 +140,7 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 			var start time.Time
 			// parseRequest has ended up with a bunch of stuff because its
 			// the first place that blocks when the connection is idle
-			req, err := parseRequest(conn, reader, status, &start)
+			req, err := parseRequest(conn, reader, status, mx, &start)
 			if err != nil {
 				if ctx.Err() != nil {
 					return
@@ -155,7 +149,9 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 				if errors.Is(err, os.ErrClosed) {
 					res.sendError(StatusServiceUnavailable)
 				} else if errors.Is(err, os.ErrDeadlineExceeded) {
+					mx.Lock()
 					if *status == ConnIdle { return }
+					mx.Unlock()
 					res.sendError(StatusRequestTimeout)
 				} else {
 					fmt.Println("Failed to parse request:", err)
@@ -174,7 +170,9 @@ func (s *Server) handleClient(conn net.Conn, ctx context.Context, wg *sync.WaitG
 				return
 			}
 
+			mx.Lock()
 			*status = ConnIdle
+			mx.Unlock()
 		}
 	}
 }
@@ -195,10 +193,11 @@ func (s *Server) DefaultMux() Handler {
 	}
 }
 
-func shutdownIdleConns(statuses map[net.Conn]*ConnStatus) {
+func shutdownIdleConns(statuses map[net.Conn]*atomic.Int32) {
 	for conn, status := range statuses {
 		// TODO there is a data race with handleClient here
-		if *status == ConnIdle {
+		if status.Load() == ConnIdle {
+			status.Store(ConnClosed)
 			conn.Close()
 		}
 	}
